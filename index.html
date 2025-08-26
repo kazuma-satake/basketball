@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 20px; background-color: #f7f9fc; color: #333; }
+      .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+      h1, h2 { color: #1a237e; border-bottom: 2px solid #e8eaf6; padding-bottom: 10px; }
+      #scoreboard { text-align: center; font-size: 3.5em; font-weight: bold; color: #0d47a1; margin-bottom: 20px; }
+      .section { margin-bottom: 25px; padding: 15px; background: #f1f3f5; border-radius: 8px; }
+      label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
+      select, button, input { width: 100%; padding: 12px; font-size: 1em; border-radius: 5px; border: 1px solid #ccc; box-sizing: border-box; margin-bottom: 10px;}
+      button { cursor: pointer; font-weight: bold; color: white; border: none; }
+      .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .btn-create { background-color: #1976d2; }
+      .btn-made { background-color: #2e7d32; }
+      .btn-missed { background-color: #d32f2f; }
+      #status { margin-top: 15px; font-weight: bold; text-align: center; padding: 10px; border-radius: 5px; }
+      .status-success { color: #2e7d32; background-color: #e8f5e9;}
+      .status-error { color: #d32f2f; background-color: #ffebee;}
+      table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+      th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+      th { background-color: #3949ab; color: white; }
+      tbody tr:nth-child(even) { background-color: #f2f2f2; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>バスケ スコアブック</h1>
+
+      <div class="section">
+        <h2>試合の管理</h2>
+        <label for="game-select">試合を選択</label>
+        <select id="game-select" onchange="loadSelectedGame()">
+          <option value="">-- 試合を選択してください --</option>
+        </select>
+        <hr style="margin: 20px 0;">
+        <label for="new-game-name">新しい試合を作成</label>
+        <input type="text" id="new-game-name" placeholder="例：練習試合 vs. ABC高校">
+        <button onclick="createGame()" class="btn-create">試合を作成</button>
+      </div>
+
+      <h2 id="current-game-title">試合を選択してください</h2>
+      <div id="scoreboard">0</div>
+
+      <div class="section" id="recorder-section" style="display:none;">
+        <h2>記録</h2>
+        <label for="player-select">選手を選択</label>
+        <select id="player-select"></select>
+        <div class="actions">
+          <button onclick="record('2P成功')" class="btn-made">2P成功</button>
+          <button onclick="record('2P失敗')" class="btn-missed">2P失敗</button>
+          <button onclick="record('3P成功')" class="btn-made">3P成功</button>
+          <button onclick="record('3P失敗')" class="btn-missed">3P失敗</button>
+          <button onclick="record('FT成功')" class="btn-made">FT成功</button>
+          <button onclick="record('FT失敗')" class="btn-missed">FT失敗</button>
+        </div>
+        <div id="status"></div>
+      </div>
+
+      <h2>個人スタッツ</h2>
+      <div id="stats-table">
+        <p>試合を選択すると、ここにスタッツが表示されます。</p>
+      </div>
+    </div>
+
+    <script>
+      let currentGameId = null;
+
+      // ページ読み込み時に実行
+      document.addEventListener('DOMContentLoaded', function() {
+        loadPlayers();
+        loadGames();
+      });
+
+      // --- 試合管理 ---
+      function createGame() {
+        const gameNameInput = document.getElementById('new-game-name');
+        const gameName = gameNameInput.value.trim();
+        if (!gameName) {
+          alert('試合名を入力してください。');
+          return;
+        }
+        google.script.run.withSuccessHandler(response => {
+          if (response.status === 'success') {
+            const newGame = response.newGame;
+            const select = document.getElementById('game-select');
+            const option = document.createElement('option');
+            option.value = newGame.id;
+            option.text = newGame.name;
+            select.add(option);
+            select.value = newGame.id; // 新しく作った試合を選択状態にする
+            gameNameInput.value = ''; // 入力欄をクリア
+            loadSelectedGame(); // 作成した試合を読み込む
+          } else {
+            alert('エラー: ' + response.message);
+          }
+        }).createNewGame(gameName);
+      }
+
+      function loadGames() {
+        google.script.run.withSuccessHandler(games => {
+          const select = document.getElementById('game-select');
+          // 既存のオプションをクリア（「選択してください」を除く）
+          while (select.options.length > 1) {
+            select.remove(1);
+          }
+          // 新しいリストを追加
+          games.forEach(game => {
+            const option = document.createElement('option');
+            option.value = game.id;
+            option.text = game.name;
+            select.add(option);
+          });
+        }).getGames();
+      }
+      
+      function loadSelectedGame() {
+        const select = document.getElementById('game-select');
+        currentGameId = select.value;
+        const gameName = select.options[select.selectedIndex].text;
+        const recorderSection = document.getElementById('recorder-section');
+        
+        if (currentGameId) {
+          document.getElementById('current-game-title').textContent = gameName;
+          recorderSection.style.display = 'block'; // 記録エリアを表示
+          updateStatsAndScore();
+        } else {
+          document.getElementById('current-game-title').textContent = '試合を選択してください';
+          recorderSection.style.display = 'none'; // 記録エリアを非表示
+          document.getElementById('scoreboard').textContent = '0';
+          document.getElementById('stats-table').innerHTML = '<p>試合を選択すると、ここにスタッツが表示されます。</p>';
+        }
+      }
+
+      // --- 選手と記録 ---
+      function loadPlayers() {
+        google.script.run.withSuccessHandler(players => {
+          const select = document.getElementById('player-select');
+          select.innerHTML = ''; // クリア
+          players.forEach(player => {
+            const option = document.createElement('option');
+            option.value = player;
+            option.text = player;
+            select.add(option);
+          });
+        }).getPlayers();
+      }
+
+      function record(play) {
+        const player = document.getElementById('player-select').value;
+        if (!player) {
+          alert('選手を選択してください。');
+          return;
+        }
+        if (!currentGameId) {
+          alert('記録する試合を選択してください。');
+          return;
+        }
+        google.script.run.withSuccessHandler(response => {
+          showStatus(response.message, response.status);
+          if (response.status === 'success') {
+            updateStatsAndScore(); // 記録成功後にスタッツを更新
+          }
+        }).recordPlay(player, play, currentGameId);
+      }
+
+      // --- 表示更新 ---
+      function updateStatsAndScore() {
+        if (!currentGameId) return;
+        
+        google.script.run.withSuccessHandler(data => {
+          // スコアを更新
+          document.getElementById('scoreboard').textContent = data.totalScore;
+
+          // スタッツテーブルを更新
+          const tableDiv = document.getElementById('stats-table');
+          if (!data.stats || data.stats.length === 0) {
+            tableDiv.innerHTML = '<p>この試合の記録はまだありません。</p>';
+            return;
+          }
+
+          let tableHTML = '<table><thead><tr>';
+          data.headers.forEach(header => {
+            tableHTML += `<th>${header}</th>`;
+          });
+          tableHTML += '</tr></thead><tbody>';
+          data.stats.forEach(row => {
+            tableHTML += '<tr>';
+            row.forEach(cell => {
+              tableHTML += `<td>${cell}</td>`;
+            });
+            tableHTML += '</tr>';
+          });
+          tableHTML += '</tbody></table>';
+          tableDiv.innerHTML = tableHTML;
+        }).getStatsAndScore(currentGameId);
+      }
+      
+      function showStatus(message, status) {
+        const statusDiv = document.getElementById('status');
+        statusDiv.textContent = message;
+        statusDiv.className = status === 'success' ? 'status-success' : 'status-error';
+        setTimeout(() => { 
+          statusDiv.textContent = '';
+          statusDiv.className = '';
+        }, 2500);
+      }
+    </script>
+  </body>
+</html>
