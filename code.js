@@ -5,7 +5,7 @@ const SPREADSHEET_ID = SpreadsheetApp.getActiveSpreadsheet().getId();
  * Webアプリのメインページを表示します。
  */
 function doGet() {
-  setupSpreadsheetsIfNeeded(); // 最初にシート構造を確認・作成
+  setupSpreadsheetsIfNeeded();
   return HtmlService.createTemplateFromFile('index').evaluate()
     .setTitle('バスケ スコアブック')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
@@ -36,7 +36,6 @@ function setupSpreadsheetsIfNeeded() {
     }
   }
 
-  // 選手名簿にサンプルデータを入力
   const rosterSheet = ss.getSheetByName('選手名簿');
   if (rosterSheet.getLastRow() < 2) {
       rosterSheet.getRange('A2:A4').setValues([['選手A'], ['選手B'], ['選手C']]);
@@ -46,15 +45,29 @@ function setupSpreadsheetsIfNeeded() {
 // --- Webアプリから呼び出されるバックエンド関数 ---
 
 /**
+ * ★★★ 高速化のための新しい関数 ★★★
+ * プレーをバックグラウンドで記録するだけの軽量な関数。データを返さないため高速。
+ */
+function recordPlayInBackground(player, play, gameId) {
+  if (!gameId) { return; }
+  try {
+    const ss = getSpreadsheet();
+    const logSheet = ss.getSheetByName('スコア記録');
+    logSheet.appendRow([new Date(), gameId, player, play]);
+  } catch (e) {
+    // エラーが発生してもUIは既に更新されているため、ここではログに残すだけ
+    console.error('記録エラー: ' + e.message);
+  }
+}
+
+/**
  * 新しい試合を作成します。
  */
 function createNewGame(gameName) {
-  if (!gameName) {
-    return { status: 'error', message: '試合名を入力してください。' };
-  }
+  if (!gameName) { return { status: 'error', message: '試合名を入力してください。' }; }
   const ss = getSpreadsheet();
   const gameSheet = ss.getSheetByName('試合一覧');
-  const newGameId = 'G' + new Date().getTime(); // ユニークな試合IDを生成
+  const newGameId = 'G' + new Date().getTime();
   gameSheet.appendRow([newGameId, gameName, new Date()]);
   return { status: 'success', newGame: { id: newGameId, name: gameName }};
 }
@@ -65,11 +78,8 @@ function createNewGame(gameName) {
 function getGames() {
   const ss = getSpreadsheet();
   const gameSheet = ss.getSheetByName('試合一覧');
-  if (gameSheet.getLastRow() < 2) {
-    return [];
-  }
+  if (gameSheet.getLastRow() < 2) return [];
   const gameData = gameSheet.getRange(2, 1, gameSheet.getLastRow() - 1, 2).getValues();
-  // [[id1, name1], [id2, name2]] の形式で返す
   return gameData.map(row => ({ id: row[0], name: row[1] }));
 }
 
@@ -84,20 +94,8 @@ function getPlayers() {
 }
 
 /**
- * プレーを記録します。試合IDも一緒に保存します。
- */
-function recordPlay(player, play, gameId) {
-  if (!gameId) {
-    return { status: 'error', message: '記録する試合を選択してください。' };
-  }
-  const ss = getSpreadsheet();
-  const logSheet = ss.getSheetByName('スコア記録');
-  logSheet.appendRow([new Date(), gameId, player, play]);
-  return { status: 'success', message: `${player}の${play}を記録しました。` };
-}
-
-/**
  * 指定された試合IDに基づいて、個人スタッツと合計点を計算して返します。
+ * (この関数は試合を読み込む最初の1回だけ使われます)
  */
 function getStatsAndScore(gameId) {
   if (!gameId) {
@@ -107,62 +105,36 @@ function getStatsAndScore(gameId) {
   const ss = getSpreadsheet();
   const logSheet = ss.getSheetByName('スコア記録');
   
-  // 記録がない場合はここで処理を終了
+  const headers = ['選手名', 'PTS', 'FGM', 'FGA', '3PM', '3PA', 'FTM', 'FTA'];
   if (logSheet.getLastRow() < 2) {
-    return { headers: ['選手名', 'PTS', 'FGM', 'FGA', '3PM', '3PA', 'FTM', 'FTA'], stats: [], totalScore: 0 };
+    return { headers: headers, stats: [], totalScore: 0 };
   }
 
   const logs = logSheet.getRange(2, 1, logSheet.getLastRow() - 1, 4).getValues();
-  const gameLogs = logs.filter(row => row[1] === gameId); // 対象の試合のログだけを抽出
+  const gameLogs = logs.filter(row => row[1] === gameId);
 
   const playerStats = {};
 
-  // 抽出したログを元にスタッツを計算
   gameLogs.forEach(row => {
     const player = row[2];
     const play = row[3];
 
-    // statsオブジェクトに選手が存在しなければ初期化
     if (!playerStats[player]) {
       playerStats[player] = { PTS: 0, FGM: 0, FGA: 0, '3PM': 0, '3PA': 0, FTM: 0, FTA: 0 };
     }
     const stats = playerStats[player];
 
     switch (play) {
-      case '2P成功':
-        stats.PTS += 2;
-        stats.FGM++;
-        stats.FGA++;
-        break;
-      case '2P失敗':
-        stats.FGA++;
-        break;
-      case '3P成功':
-        stats.PTS += 3;
-        stats.FGM++;
-        stats.FGA++;
-        stats['3PM']++;
-        stats['3PA']++;
-        break;
-      case '3P失敗':
-        stats.FGA++;
-        stats['3PA']++;
-        break;
-      case 'FT成功':
-        stats.PTS += 1;
-        stats.FTM++;
-        stats.FTA++;
-        break;
-      case 'FT失敗':
-        stats.FTA++;
-        break;
+      case '2P成功': stats.PTS += 2; stats.FGM++; stats.FGA++; break;
+      case '2P失敗': stats.FGA++; break;
+      case '3P成功': stats.PTS += 3; stats.FGM++; stats.FGA++; stats['3PM']++; stats['3PA']++; break;
+      case '3P失敗': stats.FGA++; stats['3PA']++; break;
+      case 'FT成功': stats.PTS += 1; stats.FTM++; stats.FTA++; break;
+      case 'FT失敗': stats.FTA++; break;
     }
   });
 
-  const headers = ['選手名', 'PTS', 'FGM', 'FGA', '3PM', '3PA', 'FTM', 'FTA'];
   let totalScore = 0;
-
-  // 計算結果をテーブル表示用の配列形式に変換
   const statsArray = Object.keys(playerStats).map(player => {
     const p = playerStats[player];
     totalScore += p.PTS;
