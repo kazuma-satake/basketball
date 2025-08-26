@@ -11,14 +11,12 @@
       .section { margin-bottom: 25px; padding: 15px; background: #f1f3f5; border-radius: 8px; }
       label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
       select, button, input { width: 100%; padding: 12px; font-size: 1em; border-radius: 5px; border: 1px solid #ccc; box-sizing: border-box; margin-bottom: 10px;}
-      button { cursor: pointer; font-weight: bold; color: white; border: none; }
+      button { cursor: pointer; font-weight: bold; color: white; border: none; transition: background-color 0.2s; }
+      button:active { transform: scale(0.98); }
       .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
       .btn-create { background-color: #1976d2; }
       .btn-made { background-color: #2e7d32; }
       .btn-missed { background-color: #d32f2f; }
-      #status { margin-top: 15px; font-weight: bold; text-align: center; padding: 10px; border-radius: 5px; }
-      .status-success { color: #2e7d32; background-color: #e8f5e9;}
-      .status-error { color: #d32f2f; background-color: #ffebee;}
       table { width: 100%; border-collapse: collapse; margin-top: 20px; }
       th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
       th { background-color: #3949ab; color: white; }
@@ -32,9 +30,7 @@
       <div class="section">
         <h2>試合の管理</h2>
         <label for="game-select">試合を選択</label>
-        <select id="game-select" onchange="loadSelectedGame()">
-          <option value="">-- 試合を選択してください --</option>
-        </select>
+        <select id="game-select" onchange="loadSelectedGame()"><option value="">-- 試合を選択 --</option></select>
         <hr style="margin: 20px 0;">
         <label for="new-game-name">新しい試合を作成</label>
         <input type="text" id="new-game-name" placeholder="例：練習試合 vs. ABC高校">
@@ -56,20 +52,18 @@
           <button onclick="record('FT成功')" class="btn-made">FT成功</button>
           <button onclick="record('FT失敗')" class="btn-missed">FT失敗</button>
         </div>
-        <div id="status"></div>
       </div>
 
       <h2>個人スタッツ</h2>
-      <div id="stats-table">
-        <p>試合を選択すると、ここにスタッツが表示されます。</p>
-      </div>
+      <div id="stats-table"><p>試合を選択すると、ここにスタッツが表示されます。</p></div>
     </div>
 
     <script>
       let currentGameId = null;
+      let localStats = {}; // ★★★ ローカルにスタッツを保持するオブジェクト ★★★
+      let headers = ['選手名', 'PTS', 'FGM', 'FGA', '3PM', '3PA', 'FTM', 'FTA'];
 
-      // ページ読み込み時に実行
-      document.addEventListener('DOMContentLoaded', function() {
+      document.addEventListener('DOMContentLoaded', () => {
         loadPlayers();
         loadGames();
       });
@@ -78,41 +72,25 @@
       function createGame() {
         const gameNameInput = document.getElementById('new-game-name');
         const gameName = gameNameInput.value.trim();
-        if (!gameName) {
-          alert('試合名を入力してください。');
-          return;
-        }
+        if (!gameName) return alert('試合名を入力してください。');
+        
         google.script.run.withSuccessHandler(response => {
-          if (response.status === 'success') {
-            const newGame = response.newGame;
-            const select = document.getElementById('game-select');
-            const option = document.createElement('option');
-            option.value = newGame.id;
-            option.text = newGame.name;
-            select.add(option);
-            select.value = newGame.id; // 新しく作った試合を選択状態にする
-            gameNameInput.value = ''; // 入力欄をクリア
-            loadSelectedGame(); // 作成した試合を読み込む
-          } else {
-            alert('エラー: ' + response.message);
-          }
+          if (response.status !== 'success') return alert('エラー: ' + response.message);
+          const { newGame } = response;
+          const select = document.getElementById('game-select');
+          const option = new Option(newGame.name, newGame.id);
+          select.add(option);
+          select.value = newGame.id;
+          gameNameInput.value = '';
+          loadSelectedGame();
         }).createNewGame(gameName);
       }
 
       function loadGames() {
         google.script.run.withSuccessHandler(games => {
           const select = document.getElementById('game-select');
-          // 既存のオプションをクリア（「選択してください」を除く）
-          while (select.options.length > 1) {
-            select.remove(1);
-          }
-          // 新しいリストを追加
-          games.forEach(game => {
-            const option = document.createElement('option');
-            option.value = game.id;
-            option.text = game.name;
-            select.add(option);
-          });
+          while (select.options.length > 1) select.remove(1);
+          games.forEach(game => select.add(new Option(game.name, game.id)));
         }).getGames();
       }
       
@@ -124,13 +102,21 @@
         
         if (currentGameId) {
           document.getElementById('current-game-title').textContent = gameName;
-          recorderSection.style.display = 'block'; // 記録エリアを表示
-          updateStatsAndScore();
+          recorderSection.style.display = 'block';
+          google.script.run.withSuccessHandler(data => {
+            // サーバーから取得した初期データをローカルに保存
+            localStats = {};
+            data.stats.forEach(row => {
+              const [player, PTS, FGM, FGA, P3M, P3A, FTM, FTA] = row;
+              localStats[player] = { PTS, FGM, FGA, '3PM': P3M, '3PA': P3A, FTM, FTA };
+            });
+            updateDisplay();
+          }).getStatsAndScore(currentGameId);
         } else {
           document.getElementById('current-game-title').textContent = '試合を選択してください';
-          recorderSection.style.display = 'none'; // 記録エリアを非表示
-          document.getElementById('scoreboard').textContent = '0';
-          document.getElementById('stats-table').innerHTML = '<p>試合を選択すると、ここにスタッツが表示されます。</p>';
+          recorderSection.style.display = 'none';
+          localStats = {};
+          updateDisplay();
         }
       }
 
@@ -138,74 +124,69 @@
       function loadPlayers() {
         google.script.run.withSuccessHandler(players => {
           const select = document.getElementById('player-select');
-          select.innerHTML = ''; // クリア
-          players.forEach(player => {
-            const option = document.createElement('option');
-            option.value = player;
-            option.text = player;
-            select.add(option);
-          });
+          select.innerHTML = '';
+          players.forEach(player => select.add(new Option(player, player)));
         }).getPlayers();
       }
 
+      // ★★★ ここからが高速化の核心部 ★★★
       function record(play) {
         const player = document.getElementById('player-select').value;
-        if (!player) {
-          alert('選手を選択してください。');
-          return;
+        if (!player || !currentGameId) return;
+
+        // Step 1: ローカルのスタッツを即座に更新
+        if (!localStats[player]) {
+          localStats[player] = { PTS: 0, FGM: 0, FGA: 0, '3PM': 0, '3PA': 0, FTM: 0, FTA: 0 };
         }
-        if (!currentGameId) {
-          alert('記録する試合を選択してください。');
-          return;
+        const stats = localStats[player];
+        switch (play) {
+          case '2P成功': stats.PTS += 2; stats.FGM++; stats.FGA++; break;
+          case '2P失敗': stats.FGA++; break;
+          case '3P成功': stats.PTS += 3; stats.FGM++; stats.FGA++; stats['3PM']++; stats['3PA']++; break;
+          case '3P失敗': stats.FGA++; stats['3PA']++; break;
+          case 'FT成功': stats.PTS += 1; stats.FTM++; stats.FTA++; break;
+          case 'FT失敗': stats.FTA++; break;
         }
-        google.script.run.withSuccessHandler(response => {
-          showStatus(response.message, response.status);
-          if (response.status === 'success') {
-            updateStatsAndScore(); // 記録成功後にスタッツを更新
-          }
-        }).recordPlay(player, play, currentGameId);
+
+        // Step 2: 更新されたローカルスタッツを元に画面を再描画（即時反映）
+        updateDisplay();
+
+        // Step 3: バックグラウンドでサーバーにデータを送信（ユーザーは待たない）
+        google.script.run.recordPlayInBackground(player, play, currentGameId);
       }
 
       // --- 表示更新 ---
-      function updateStatsAndScore() {
-        if (!currentGameId) return;
-        
-        google.script.run.withSuccessHandler(data => {
-          // スコアを更新
-          document.getElementById('scoreboard').textContent = data.totalScore;
+      function updateDisplay() {
+        let totalScore = 0;
+        const statsArray = [];
 
-          // スタッツテーブルを更新
-          const tableDiv = document.getElementById('stats-table');
-          if (!data.stats || data.stats.length === 0) {
-            tableDiv.innerHTML = '<p>この試合の記録はまだありません。</p>';
-            return;
-          }
+        // ヘッダー順にソートして表示を安定させる
+        const sortedPlayers = Object.keys(localStats).sort();
 
-          let tableHTML = '<table><thead><tr>';
-          data.headers.forEach(header => {
-            tableHTML += `<th>${header}</th>`;
-          });
-          tableHTML += '</tr></thead><tbody>';
-          data.stats.forEach(row => {
-            tableHTML += '<tr>';
-            row.forEach(cell => {
-              tableHTML += `<td>${cell}</td>`;
-            });
-            tableHTML += '</tr>';
-          });
-          tableHTML += '</tbody></table>';
-          tableDiv.innerHTML = tableHTML;
-        }).getStatsAndScore(currentGameId);
-      }
-      
-      function showStatus(message, status) {
-        const statusDiv = document.getElementById('status');
-        statusDiv.textContent = message;
-        statusDiv.className = status === 'success' ? 'status-success' : 'status-error';
-        setTimeout(() => { 
-          statusDiv.textContent = '';
-          statusDiv.className = '';
-        }, 2500);
+        for(const player of sortedPlayers) {
+            const p = localStats[player];
+            totalScore += p.PTS;
+            statsArray.push([player, p.PTS, p.FGM, p.FGA, p['3PM'], p['3PA'], p.FTM, p.FTA]);
+        }
+
+        document.getElementById('scoreboard').textContent = totalScore;
+
+        const tableDiv = document.getElementById('stats-table');
+        if (statsArray.length === 0) {
+          tableDiv.innerHTML = '<p>この試合の記録はまだありません。</p>';
+          return;
+        }
+
+        let tableHTML = '<table><thead><tr>';
+        headers.forEach(header => { tableHTML += `<th>${header}</th>`; });
+        tableHTML += '</tr></thead><tbody>';
+        statsArray.forEach(row => {
+          tableHTML += '<tr>';
+          row.forEach(cell => { tableHTML += `<td>${cell}</td>`; });
+          tableHTML += '</tr>';
+        });
+        tableHTML += '</tbody></table>';
+        tableDiv.innerHTML = tableHTML;
       }
     </script>
   </body>
