@@ -13,28 +13,37 @@
       select, button, input { width: 100%; padding: 12px; font-size: 1em; border-radius: 5px; border: 1px solid #ccc; box-sizing: border-box; margin-bottom: 10px;}
       button { cursor: pointer; font-weight: bold; color: white; border: none; transition: background-color 0.2s; }
       button:active { transform: scale(0.98); }
-      .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .actions { 
+        display: grid; 
+        grid-template-columns: 1fr 1fr; /* 2列に設定 */
+        gap: 10px; 
+      }
       .btn-create { background-color: #1976d2; }
       .btn-made { background-color: #2e7d32; }
       .btn-missed { background-color: #d32f2f; }
-      table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-      th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+      .btn-foul { background-color: #6c757d; } /* ★新規追加: ファウルボタン用のスタイル */
+      table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 0.9em; }
+      th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
       th { background-color: #3949ab; color: white; }
-      tbody tr:nth-child(even) { background-color: #f2f2f2; }
+      /* 偶数行の背景色は色分けで上書きされるため、削除またはコメントアウトしてもOK */
+      /* tbody tr:nth-child(even) { background-color: #f2f2f2; } */
+      #play-history-list { list-style: none; padding: 0; max-height: 200px; overflow-y: auto; border: 1px solid #ccc; border-radius: 5px; background-color: #fff; }
+      #play-history-list li { display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid #eee; }
+      #play-history-list li:last-child { border-bottom: none; }
+      .btn-delete { background-color: #c62828; color: white; padding: 4px 8px; font-size: 0.8em; border-radius: 4px; width: auto; margin-bottom: 0;}
+      .loader, .error-message { text-align: center; padding: 20px; font-style: italic; color: #777; border-radius: 5px; }
+      .error-message { font-weight: bold; color: #d32f2f; background-color: #ffebee; border: 1px solid #d32f2f; }
     </style>
   </head>
   <body>
     <div class="container">
       <h1>バスケ スコアブック</h1>
-
       <div class="section">
         <h2>試合の管理</h2>
-        <label for="game-select">試合を選択</label>
-        <select id="game-select" onchange="loadSelectedGame()"><option value="">-- 試合を選択 --</option></select>
+        <select id="game-select" onchange="App.handleGameSelectionChange()"><option value="">-- 試合を選択 --</option></select>
         <hr style="margin: 20px 0;">
-        <label for="new-game-name">新しい試合を作成</label>
-        <input type="text" id="new-game-name" placeholder="例：練習試合 vs. ABC高校">
-        <button onclick="createGame()" class="btn-create">試合を作成</button>
+        <input type="text" id="new-game-name" placeholder="新しい試合名を入力">
+        <button onclick="App.createGame()" class="btn-create">試合を作成</button>
       </div>
 
       <h2 id="current-game-title">試合を選択してください</h2>
@@ -42,152 +51,254 @@
 
       <div class="section" id="recorder-section" style="display:none;">
         <h2>記録</h2>
-        <label for="player-select">選手を選択</label>
         <select id="player-select"></select>
         <div class="actions">
-          <button onclick="record('2P成功')" class="btn-made">2P成功</button>
-          <button onclick="record('2P失敗')" class="btn-missed">2P失敗</button>
-          <button onclick="record('3P成功')" class="btn-made">3P成功</button>
-          <button onclick="record('3P失敗')" class="btn-missed">3P失敗</button>
-          <button onclick="record('FT成功')" class="btn-made">FT成功</button>
-          <button onclick="record('FT失敗')" class="btn-missed">FT失敗</button>
+          <button onclick="App.addPlay('2P成功')" class="btn-made">2P成功</button>
+          <button onclick="App.addPlay('2P失敗')" class="btn-missed">2P失敗</button>
+          <button onclick="App.addPlay('3P成功')" class="btn-made">3P成功</button>
+          <button onclick="App.addPlay('3P失敗')" class="btn-missed">3P失敗</button>
+          <button onclick="App.addPlay('FT成功')" class="btn-made">FT成功</button>
+          <button onclick="App.addPlay('FT失敗')" class="btn-missed">FT失敗</button>
+          <button onclick="App.addPlay('PF')" class="btn-foul" style="grid-column: 1 / -1;">ファウル</button>
         </div>
+      </div>
+      
+      <div class="section" id="history-section" style="display:none;">
+        <h2>プレー履歴（直近3件）</h2>
+        <ul id="play-history-list"></ul>
       </div>
 
       <h2>個人スタッツ</h2>
-      <div id="stats-table"><p>試合を選択すると、ここにスタッツが表示されます。</p></div>
+      <div id="stats-table"></div>
     </div>
 
     <script>
-      let currentGameId = null;
-      let localStats = {}; // ★★★ ローカルにスタッツを保持するオブジェクト ★★★
-      let headers = ['選手名', 'PTS', 'FGM', 'FGA', '3PM', '3PA', 'FTM', 'FTA'];
+      const App = {
+        state: {
+          currentGameId: null,
+          localPlays: [],
+          playerList: [],
+          // ★修正点: ヘッダーにPFを追加
+          headers: ['背番号', '選手名', 'PF', 'PTS', 'FGM', 'FGA', 'FG%', '3PM', '3PA', '3P%', 'FTM', 'FTA', 'FT%'] 
+        },
 
-      document.addEventListener('DOMContentLoaded', () => {
-        loadPlayers();
-        loadGames();
-      });
-
-      // --- 試合管理 ---
-      function createGame() {
-        const gameNameInput = document.getElementById('new-game-name');
-        const gameName = gameNameInput.value.trim();
-        if (!gameName) return alert('試合名を入力してください。');
-        
-        google.script.run.withSuccessHandler(response => {
-          if (response.status !== 'success') return alert('エラー: ' + response.message);
-          const { newGame } = response;
-          const select = document.getElementById('game-select');
-          const option = new Option(newGame.name, newGame.id);
-          select.add(option);
-          select.value = newGame.id;
-          gameNameInput.value = '';
-          loadSelectedGame();
-        }).createNewGame(gameName);
-      }
-
-      function loadGames() {
-        google.script.run.withSuccessHandler(games => {
-          const select = document.getElementById('game-select');
-          while (select.options.length > 1) select.remove(1);
-          games.forEach(game => select.add(new Option(game.name, game.id)));
-        }).getGames();
-      }
-      
-      function loadSelectedGame() {
-        const select = document.getElementById('game-select');
-        currentGameId = select.value;
-        const gameName = select.options[select.selectedIndex].text;
-        const recorderSection = document.getElementById('recorder-section');
-        
-        if (currentGameId) {
-          document.getElementById('current-game-title').textContent = gameName;
-          recorderSection.style.display = 'block';
-          google.script.run.withSuccessHandler(data => {
-            // サーバーから取得した初期データをローカルに保存
-            localStats = {};
-            data.stats.forEach(row => {
-              const [player, PTS, FGM, FGA, P3M, P3A, FTM, FTA] = row;
-              localStats[player] = { PTS, FGM, FGA, '3PM': P3M, '3PA': P3A, FTM, FTA };
+        init() {
+          this.renderStatsTable([]);
+          this.callServer('getPlayers')
+            .then(players => {
+              this.state.playerList = players || [];
+              this.renderPlayerSelect();
+              return this.callServer('getGames');
+            })
+            .then(games => {
+              this.renderGameSelect(games);
+              if(games && games.length > 0) {
+                 document.getElementById('game-select').value = games[0].id;
+                 this.handleGameSelectionChange();
+              }
             });
-            updateDisplay();
-          }).getStatsAndScore(currentGameId);
-        } else {
-          document.getElementById('current-game-title').textContent = '試合を選択してください';
-          recorderSection.style.display = 'none';
-          localStats = {};
-          updateDisplay();
+        },
+
+        callServer(functionName, ...args) {
+          this.setLoading(true);
+          return new Promise((resolve, reject) => {
+            google.script.run
+              .withSuccessHandler(response => {
+                this.setLoading(false);
+                resolve(response);
+              })
+              .withFailureHandler(error => {
+                this.setLoading(false);
+                this.handleFailure(error);
+                reject(error);
+              })
+              .callServerFunction(functionName, ...args);
+          });
+        },
+
+        setLoading(isLoading) {
+          const titleElement = document.getElementById('current-game-title');
+          if (isLoading) {
+            titleElement.textContent = "通信中...";
+          } else {
+            const select = document.getElementById('game-select');
+            if (select.value) {
+              titleElement.textContent = select.options[select.selectedIndex].text;
+            } else {
+              titleElement.textContent = '試合を選択してください';
+            }
+          }
+        },
+
+        handleFailure(error) {
+          console.error("Server Error:", error);
+          const statsTable = document.getElementById('stats-table');
+          statsTable.innerHTML = `<div class="error-message">エラーが発生しました: ${error.message}</div>`;
+        },
+
+        handleGameSelectionChange() {
+          const select = document.getElementById('game-select');
+          const gameId = select.value;
+          this.state.currentGameId = gameId;
+          if (!gameId) {
+            this.clearDisplay();
+            return;
+          }
+          const gameName = select.options[select.selectedIndex].text;
+          document.getElementById('current-game-title').textContent = gameName;
+          document.getElementById('recorder-section').style.display = 'block';
+          document.getElementById('history-section').style.display = 'block';
+          this.callServer('getInitialGameData', gameId)
+            .then(data => {
+              this.state.localPlays = data.plays || [];
+              this.recalculateAndRender();
+            });
+        },
+        
+        clearDisplay() {
+            this.state.localPlays = [];
+            this.state.currentGameId = null;
+            document.getElementById('current-game-title').textContent = '試合を選択してください';
+            document.getElementById('recorder-section').style.display = 'none';
+            document.getElementById('history-section').style.display = 'none';
+            this.recalculateAndRender();
+        },
+
+        addPlay(play) {
+          const playerDisplay = document.getElementById('player-select').value;
+          if (!playerDisplay) return alert("選手が選択されていません。");
+          if (!this.state.currentGameId) return;
+          const [playerNumber, playerName] = playerDisplay.split(' ', 2);
+          const tempId = 'temp_' + Date.now();
+          const tempPlay = { playerNumber, playerName, play, id: tempId };
+          this.state.localPlays.push(tempPlay);
+          this.recalculateAndRender();
+          this.callServer('recordPlay', playerDisplay, play, this.state.currentGameId)
+            .then(confirmedPlay => {
+              const tempIndex = this.state.localPlays.findIndex(p => p.id === tempId);
+              if(tempIndex > -1) this.state.localPlays[tempIndex] = confirmedPlay;
+              this.renderPlayHistory();
+            })
+            .catch(() => {
+              this.state.localPlays = this.state.localPlays.filter(p => p.id !== tempId);
+              this.recalculateAndRender();
+            });
+        },
+
+        deletePlay(playId) {
+          if (!playId || !this.state.currentGameId || !confirm('この記録を削除しますか？')) return;
+          this.callServer('deletePlay', playId, this.state.currentGameId).then(() => {
+            this.state.localPlays = this.state.localPlays.filter(p => p.id !== playId);
+            this.recalculateAndRender();
+          });
+        },
+        
+        createGame() {
+            const gameNameInput = document.getElementById('new-game-name');
+            const gameName = gameNameInput.value.trim();
+            if (!gameName) return alert('試合名を入力してください。');
+            this.callServer('createNewGame', gameName).then(newGame => {
+                const select = document.getElementById('game-select');
+                select.add(new Option(newGame.name, newGame.id), select.options[1]);
+                select.value = newGame.id;
+                gameNameInput.value = '';
+                this.handleGameSelectionChange();
+            });
+        },
+
+        recalculateAndRender() {
+          const playerStats = {};
+          this.state.playerList.forEach(p => {
+              const key = `${p.number}_${p.name}`;
+              // ★修正点: PFを初期化
+              playerStats[key] = { number: p.number, name: p.name, PF: 0, PTS: 0, FGM: 0, FGA: 0, '3PM': 0, '3PA': 0, FTM: 0, FTA: 0 };
+          });
+          this.state.localPlays.forEach(p => {
+            const key = `${p.playerNumber}_${p.playerName}`;
+            if (!playerStats[key]) {
+                playerStats[key] = { number: p.playerNumber, name: p.playerName, PF: 0, PTS: 0, FGM: 0, FGA: 0, '3PM': 0, '3PA': 0, FTM: 0, FTA: 0 };
+            }
+            const stats = playerStats[key];
+            switch (p.play) {
+              case '2P成功': stats.PTS += 2; stats.FGM++; stats.FGA++; break;
+              case '2P失敗': stats.FGA++; break;
+              case '3P成功': stats.PTS += 3; stats.FGM++; stats.FGA++; stats['3PM']++; stats['3PA']++; break;
+              case '3P失敗': stats.FGA++; stats['3PA']++; break;
+              case 'FT成功': stats.PTS += 1; stats.FTM++; stats.FTA++; break;
+              case 'FT失敗': stats.FTA++; break;
+              case 'PF': stats.PF++; break; // ★新規追加: ファウルをカウント
+            }
+          });
+          
+          let totalScore = 0;
+          const sortedPlayerKeys = Object.keys(playerStats).sort((a, b) => {
+              const numA = parseInt(playerStats[a].number, 10);
+              const numB = parseInt(playerStats[b].number, 10);
+              return numA - numB;
+          });
+          const statsArray = sortedPlayerKeys.map(key => {
+              const p = playerStats[key];
+              totalScore += p.PTS;
+              const fgPct = p.FGA > 0 ? ((p.FGM / p.FGA) * 100).toFixed(1) + '%' : '---';
+              const p3Pct = p['3PA'] > 0 ? ((p['3PM'] / p['3PA']) * 100).toFixed(1) + '%' : '---';
+              const ftPct = p.FTA > 0 ? ((p.FTM / p.FTA) * 100).toFixed(1) + '%' : '---';
+              // ★修正点: PFを配列に追加
+              return [p.number, p.name, p.PF, p.PTS, p.FGM, p.FGA, fgPct, p['3PM'], p['3PA'], p3Pct, p.FTM, p.FTA, ftPct];
+          });
+          document.getElementById('scoreboard').textContent = totalScore;
+          this.renderStatsTable(statsArray);
+          this.renderPlayHistory();
+        },
+        
+        // --- Render functions ---
+        renderPlayerSelect() {
+            const select = document.getElementById('player-select');
+            select.innerHTML = '';
+            this.state.playerList.forEach(player => select.add(new Option(player.display, player.display)));
+        },
+        renderGameSelect(games) {
+            const select = document.getElementById('game-select');
+            while (select.options.length > 1) select.remove(1);
+            games.forEach(game => select.add(new Option(game.name, game.id)));
+        },
+        renderStatsTable(statsArray) {
+          const tableDiv = document.getElementById('stats-table');
+          let tableHTML = `<table><thead><tr>${this.state.headers.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>`;
+          if (this.state.playerList.length === 0) {
+            tableHTML += `<tr><td colspan="${this.state.headers.length}">選手名簿に選手を登録してください。</td></tr>`;
+          } else {
+              // ★★★ ここからが色分けの核心部 ★★★
+              statsArray.forEach(row => {
+                const foulCount = row[2]; // PFは配列の3番目 (インデックスは2)
+                let rowStyle = '';
+                if (foulCount === 3) rowStyle = 'style="background-color: #e8f5e9;"'; // 薄い緑
+                if (foulCount === 4) rowStyle = 'style="background-color: #fffde7;"'; // 薄い黄
+                if (foulCount >= 5) rowStyle = 'style="background-color: #ffebee;"'; // 薄い赤
+                
+                tableHTML += `<tr ${rowStyle}>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`;
+              });
+              // ★★★ ここまで ★★★
+          }
+          tableHTML += '</tbody></table>';
+          tableDiv.innerHTML = tableHTML;
+        },
+        renderPlayHistory() {
+          const list = document.getElementById('play-history-list');
+          list.innerHTML = '';
+          const recentPlays = this.state.localPlays.slice(-3).reverse();
+          if(recentPlays.length === 0) {
+              list.innerHTML = '<li>記録がありません</li>';
+              return;
+          }
+          recentPlays.forEach(p => {
+            const li = document.createElement('li');
+            const playText = p.play === 'PF' ? 'ファウル' : p.play; // ★修正点: PFを「ファウル」と表示
+            li.innerHTML = `<span><strong>${p.playerNumber} ${p.playerName}</strong> - ${playText}</span> <button class="btn-delete" onclick="App.deletePlay('${p.id}')" ${p.id.startsWith('temp_') ? 'disabled' : ''}>削除</button>`;
+            list.appendChild(li);
+          });
         }
-      }
-
-      // --- 選手と記録 ---
-      function loadPlayers() {
-        google.script.run.withSuccessHandler(players => {
-          const select = document.getElementById('player-select');
-          select.innerHTML = '';
-          players.forEach(player => select.add(new Option(player, player)));
-        }).getPlayers();
-      }
-
-      // ★★★ ここからが高速化の核心部 ★★★
-      function record(play) {
-        const player = document.getElementById('player-select').value;
-        if (!player || !currentGameId) return;
-
-        // Step 1: ローカルのスタッツを即座に更新
-        if (!localStats[player]) {
-          localStats[player] = { PTS: 0, FGM: 0, FGA: 0, '3PM': 0, '3PA': 0, FTM: 0, FTA: 0 };
-        }
-        const stats = localStats[player];
-        switch (play) {
-          case '2P成功': stats.PTS += 2; stats.FGM++; stats.FGA++; break;
-          case '2P失敗': stats.FGA++; break;
-          case '3P成功': stats.PTS += 3; stats.FGM++; stats.FGA++; stats['3PM']++; stats['3PA']++; break;
-          case '3P失敗': stats.FGA++; stats['3PA']++; break;
-          case 'FT成功': stats.PTS += 1; stats.FTM++; stats.FTA++; break;
-          case 'FT失敗': stats.FTA++; break;
-        }
-
-        // Step 2: 更新されたローカルスタッツを元に画面を再描画（即時反映）
-        updateDisplay();
-
-        // Step 3: バックグラウンドでサーバーにデータを送信（ユーザーは待たない）
-        google.script.run.recordPlayInBackground(player, play, currentGameId);
-      }
-
-      // --- 表示更新 ---
-      function updateDisplay() {
-        let totalScore = 0;
-        const statsArray = [];
-
-        // ヘッダー順にソートして表示を安定させる
-        const sortedPlayers = Object.keys(localStats).sort();
-
-        for(const player of sortedPlayers) {
-            const p = localStats[player];
-            totalScore += p.PTS;
-            statsArray.push([player, p.PTS, p.FGM, p.FGA, p['3PM'], p['3PA'], p.FTM, p.FTA]);
-        }
-
-        document.getElementById('scoreboard').textContent = totalScore;
-
-        const tableDiv = document.getElementById('stats-table');
-        if (statsArray.length === 0) {
-          tableDiv.innerHTML = '<p>この試合の記録はまだありません。</p>';
-          return;
-        }
-
-        let tableHTML = '<table><thead><tr>';
-        headers.forEach(header => { tableHTML += `<th>${header}</th>`; });
-        tableHTML += '</tr></thead><tbody>';
-        statsArray.forEach(row => {
-          tableHTML += '<tr>';
-          row.forEach(cell => { tableHTML += `<td>${cell}</td>`; });
-          tableHTML += '</tr>';
-        });
-        tableHTML += '</tbody></table>';
-        tableDiv.innerHTML = tableHTML;
-      }
+      };
+      document.addEventListener('DOMContentLoaded', () => App.init());
     </script>
   </body>
 </html>
